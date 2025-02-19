@@ -20,11 +20,11 @@ from typing import Optional
 import pyautogui
 import shutil
 from config import (
-    DEEPSEEK_API_KEY, MAX_TOKEN, TEMPERATURE, MODEL, DEEPSEEK_BASE_URL, LISTEN_LIST, 
+    DEEPSEEK_API_KEY, MAX_TOKEN, TEMPERATURE, MODEL, DEEPSEEK_BASE_URL, LISTEN_LIST,
     MOONSHOT_API_KEY, MOONSHOT_BASE_URL, MOONSHOT_TEMPERATURE, EMOJI_DIR,
     AUTO_MESSAGE, MIN_COUNTDOWN_HOURS, MAX_COUNTDOWN_HOURS, MOONSHOT_MODEL,
-    QUIET_TIME_START, QUIET_TIME_END
-    )
+    QUIET_TIME_START, QUIET_TIME_END, ARK_API_KEY, ARK_MODEL, ARK_BASE_URL, USE_ARK_API
+)
 
 # 获取微信窗口对象
 wx = WeChat()
@@ -81,7 +81,7 @@ def check_user_timeouts():
             if last_active and wait_time:
                 if current_time - last_active >= wait_time:
                     if not is_quiet_time():
-                        reply = get_deepseek_response(AUTO_MESSAGE, user)
+                        reply = get_ai_response(AUTO_MESSAGE, user)
                         send_reply(user, user, user, AUTO_MESSAGE, reply)
                     # 重置计时器和等待时间
                     reset_user_timer(user)
@@ -165,6 +165,75 @@ def get_deepseek_response(message, user_id):
     except Exception as e:
         logger.error(f"DeepSeek调用失败: {str(e)}", exc_info=True)
         return "抱歉，我现在有点忙，稍后再聊吧。"
+
+def get_ark_response(message,user_id):
+    try:
+        logger.info(f"调用火山方舟API-用户ID:{user_id},消息：{message}")
+
+        # 确保上下文初始化（关键修复点）
+        with queue_lock:
+            if user_id not in chat_contexts:
+                chat_contexts[user_id] = []
+
+            # 维护上下文队列长度
+            max_groups = 5  # 保持与DeepSeek相同配置
+            while len(chat_contexts[user_id]) > max_groups * 2:
+                chat_contexts[user_id].pop(0)
+
+            # 添加新用户输入到上下文
+            chat_contexts[user_id].append({"role": "user", "content": message})
+
+            # 构建有效历史记录
+            valid_history = chat_contexts[user_id][-max_groups * 2:]
+
+        headers  = {
+            "Authorization": f"Bearer {ARK_API_KEY}",
+            "Content-Type": "application/json"
+        }
+
+        data = {
+            "model": ARK_MODEL,
+            "stream": False,
+            "messages": [
+                {"role": "system", "content": get_user_prompt(user_id)},
+                *valid_history  # 改为使用维护后的历史记录
+            ]
+        }
+
+        response = requests.post(
+            f"{ARK_BASE_URL}/bots/chat/completions",
+            headers=headers,
+            json=data,
+            timeout=30
+        )
+
+        if response.status_code != 200:
+            logger.error(f"火山API错误[{response.status_code}]:{response.tex}")
+            return "服务器响应异常，请稍后再试"
+
+        result = response.json()
+        if not result.get('choices'):
+            logger.error("火山API返回异常结构")
+            return "服务器响应异常，请稍后再试"
+
+        reply = result['choices'][0]['message']['content'].strip()
+
+        with queue_lock:
+            if user_id not in chat_contexts:
+                chat_contexts[user_id] = []
+            chat_contexts[user_id].append({"role":"assistant","content":reply})
+
+        logger.info(f"火山API回复：{reply}")
+        return reply
+    except Exception as e:
+        logger.info(f"火山API调用失败：{str(e)}",exc_info=True)
+        return "暂时无法回复，请稍后再试"
+
+def get_ai_response(message,user_id):
+    if USE_ARK_API:
+        return get_ark_response(message, user_id)
+    else:
+        return get_deepseek_response(message, user_id)
 
 def message_listener():
     while True:
@@ -348,7 +417,8 @@ def process_user_messages(user_id):
     logger.info(f"处理合并消息 ({sender_name}): {merged_message}")
 
     # 获取 API 回复
-    reply = get_deepseek_response(merged_message, user_id)
+    #reply = get_deepseek_response(merged_message, user_id)
+    reply = get_ai_response(merged_message,user_id)
 
     # 如果使用Deepseek R1，则只保留思考结果
     if "</think>" in reply:
@@ -515,7 +585,7 @@ def main():
         checker_thread.start()
         
         # 启动后台线程来检查用户超时
-        threading.Thread(target=check_user_timeouts, daemon=True).start()
+        #threading.Thread(target=check_user_timeouts, daemon=True).start()
 
         logger.info("开始运行BOT...")
 

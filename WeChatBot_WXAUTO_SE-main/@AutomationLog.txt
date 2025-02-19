@@ -1,0 +1,1 @@
+2025-02-19 11:51:05.593 wxauto.py[574] AddListenChat -> Can not move cursor. ListItemControl's BoundingRectangle is (0,0,0,0)[0x0]. SearchProperties: {RegexName: '螃蟹青年', ControlType: ListItemControl}

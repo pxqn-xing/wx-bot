@@ -16,6 +16,12 @@ DEEPSEEK_BASE_URL = 'https://api.siliconflow.cn/v1/'
 # 硅基流动API的模型
 MODEL = 'Pro/deepseek-ai/DeepSeek-V3'
 
+#火山方舟配置
+ARK_API_KEY = '7b233883-61dd-4087-8dec-12c0ca0b70eb'
+ARK_BASE_URL = 'https://ark.cn-beijing.volces.com/api/v3'
+ARK_MODEL = 'bot-20250219111142-fql46'
+USE_ARK_API = True
+
 # 如果要使用官方的API
 # DEEPSEEK_BASE_URL = 'https://api.deepseek.com'
 # 官方API的V3模型
