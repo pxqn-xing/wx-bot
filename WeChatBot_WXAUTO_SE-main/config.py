@@ -7,7 +7,8 @@
 
 # 用户列表(请配置要和bot说话的账号的微信昵称，不要写备注！)
 # 例如：LISTEN_LIST = ['用户1','用户2']
-LISTEN_LIST = ['文件传输助手','梁培利','長飛','螃蟹青年','CHEN','涛']
+LISTEN_LIST = ['文件传输助手','梁培利','螃蟹青年星','相亲相爱二家人']
+BOT_NAME = '螃蟹青年'
 
 # DeepSeek API 配置
 DEEPSEEK_API_KEY = 'sk-ptlmtumpudtgxkiufynwnmsrccpvwaywhtkpvspqsnybdsmz'

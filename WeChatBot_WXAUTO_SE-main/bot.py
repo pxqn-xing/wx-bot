@@ -23,7 +23,7 @@ from config import (
     DEEPSEEK_API_KEY, MAX_TOKEN, TEMPERATURE, MODEL, DEEPSEEK_BASE_URL, LISTEN_LIST,
     MOONSHOT_API_KEY, MOONSHOT_BASE_URL, MOONSHOT_TEMPERATURE, EMOJI_DIR,
     AUTO_MESSAGE, MIN_COUNTDOWN_HOURS, MAX_COUNTDOWN_HOURS, MOONSHOT_MODEL,
-    QUIET_TIME_START, QUIET_TIME_END, ARK_API_KEY, ARK_MODEL, ARK_BASE_URL, USE_ARK_API
+    QUIET_TIME_START, QUIET_TIME_END, ARK_API_KEY, ARK_MODEL, ARK_BASE_URL, USE_ARK_API, BOT_NAME
 )
 
 # 获取微信窗口对象
@@ -246,6 +246,11 @@ def message_listener():
                     msgtype = msg.type
                     content = msg.content
                     logger.info(f'【{who}】：{content}')
+
+                    if f"@{BOT_NAME}" in content:
+                        groupname = chat.who
+                        handle_group_message(msg,groupname)
+
                     if msgtype == 'friend':
                         if '[动画表情]' in content:
                             handle_emoji_message(msg)
@@ -256,6 +261,99 @@ def message_listener():
         except Exception as e:
             logger.error(f"消息监听出错: {str(e)}")
         time.sleep(wait)
+
+def handle_group_message(msg,groupname):
+    try:
+        content = msg.repalce(f"@{BOT_NAME}","").strip()
+
+        if not content:
+            print("没有指令")
+            return
+
+        username = msg.sender
+        group_user_id = f"{groupname}_{username}_group_"
+
+        if content:
+            current_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            content = f"[{current_time}] {content}"
+            logger.info(f"处理消息 - {username}: {content}")
+            sender_name = username  # 使用昵称作为发送者名称
+
+            with queue_lock:
+                if group_user_id not in user_queues:
+                    user_queues[group_user_id] = {
+                        'messages': [content],
+                        'sender_name': username,
+                        'groupname': groupname,  # 新增字段
+                        'last_message_time': time.time()
+                    }
+                    logger.info(f"已为 {sender_name} 初始化消息队列")
+                else:
+                    # 添加新消息到消息列表
+                    if len(user_queues[username]['messages']) >= 5:
+                        # 如果消息数量超过5条，移除最早的消息
+                        user_queues[username]['messages'].pop(0)
+                    user_queues[username]['messages'].append(content)
+                    user_queues[username]['last_message_time'] = time.time()  # 更新最后消息时间
+
+                    logger.info(f"群{groupname}的发送者{sender_name} 的消息已加入队列并更新最后消息时间")
+        else:
+            logger.warning("无法获取消息内容")
+    except Exception as e:
+        logger.error(f"群消息处理失败: {str(e)}")
+
+
+def format_group_reply(username, reply):
+    """
+    构造@用户的回复格式
+    :param username: 被@的用户名
+    :param reply: 原始回复内容
+    :return: 格式化的@回复
+    """
+    return f"@{username} {reply}"
+
+
+def send_group_reply(groupname, username, merged_message, reply):
+    """
+    专门处理群消息回复
+    :param groupname: 群名称
+    :param username: 被@的用户名
+    :param merged_message: 合并后的消息内容（用于日志）
+    :param reply: AI生成的原始回复
+    """
+    global is_sending_message
+    try:
+        is_sending_message = True
+
+        # 构造格式化的@回复
+        formatted_reply = format_group_reply(username, reply)
+        logger.info(f"准备发送群回复到 {groupname}：{formatted_reply}")
+
+        # 优先处理表情包请求
+        if is_emoji_request(merged_message) or is_emoji_request(reply):
+            if emoji_path := get_random_emoji():
+                try:
+                    wx.SendFiles(filepath=emoji_path, who=groupname)
+                    logger.info(f"已发送群表情到 {groupname}")
+                except Exception as e:
+                    logger.error(f"发送群表情失败: {str(e)}")
+
+        # 分段发送文字消息
+        if '\\' in formatted_reply:
+            parts = [p.strip() for p in formatted_reply.split('\\') if p.strip()]
+            for part in parts:
+                wx.SendMsg(part, groupname)
+                time.sleep(random.uniform(0.3, 0.8))  # 更自然的间隔
+        else:
+            wx.SendMsg(formatted_reply, groupname)
+
+        # 记录到数据库时保留原始信息
+        save_message(groupname, username, merged_message, formatted_reply)
+
+    except Exception as e:
+        logger.error(f"群回复发送失败: {str(e)}")
+    finally:
+        is_sending_message = False
 
 def recognize_image_with_moonshot(image_path, is_emoji=False):
     # 先暂停向DeepSeek API发送消息队列
@@ -401,31 +499,27 @@ def check_inactive_users():
         time.sleep(1)  # 每秒检查一次
 
 def process_user_messages(user_id):
-    # 是否可以向Deepseek发消息队列
-    global can_send_messages
-
+    global can_sending_messages
     with queue_lock:
         if user_id not in user_queues:
             return
-        user_data = user_queues.pop(user_id)  # 从用户队列中移除用户数据
-        messages = user_data['messages']      # 获取消息列表
-        sender_name = user_data['sender_name']
-        username = user_data['username']
+        user_data = user_queues.pop(user_id)
 
-    # 合并消息为一句
-    merged_message = ' '.join(messages)  # 使用空格或其他分隔符合并消息
-    logger.info(f"处理合并消息 ({sender_name}): {merged_message}")
+        # 新增群消息判断逻辑
+        is_group = '_group_' in user_id  # 使用特殊标识符区分子ID
+        if is_group:
+            # 解析群组信息（格式：groupname_username_group_）
+            groupname, username = user_id.split('_group_')[0].rsplit('_', 1)
+            merged_message = ' '.join(user_data['messages'])
+            reply = get_ai_response(merged_message, user_id)
 
-    # 获取 API 回复
-    #reply = get_deepseek_response(merged_message, user_id)
-    reply = get_ai_response(merged_message,user_id)
+            if "</think>" in reply:
+                reply = reply.split("</think>", 1)[1].strip()
 
-    # 如果使用Deepseek R1，则只保留思考结果
-    if "</think>" in reply:
-        reply = reply.split("</think>", 1)[1].strip()
-    
-    # 发送回复
-    send_reply(user_id, sender_name, username, merged_message, reply)
+            send_group_reply(groupname, username, merged_message, reply)
+        else:
+            # 原有处理逻辑
+            process_user_messages(user_id)
 
 def send_reply(user_id, sender_name, username, merged_message, reply):
     global is_sending_message
